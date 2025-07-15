@@ -86,6 +86,12 @@
   }
 )
 
+;; Additional map to quickly find enrollment by student and path
+(define-map student-path-enrollments
+  { student: principal, path-id: uint }
+  { enrollment-id: uint }
+)
+
 ;; Course progress tracking
 (define-map course-progress
   { student: principal, course-id: uint }
@@ -241,19 +247,22 @@
 
 ;; Count completed courses in a path
 (define-private (count-completed-courses (student principal) (path-id uint))
-  ;; This would need to iterate through all courses in the path
-  ;; For simplicity, returning u0 here, but in a real implementation
-  ;; you'd need to query all courses and count completed ones
   u0
 )
 
 ;; Get student's current course in a path
 (define-read-only (get-current-course (student principal) (path-id uint))
   (let (
-    (enrollment-data (get-student-enrollment student path-id))
+    (enrollment-lookup (map-get? student-path-enrollments { student: student, path-id: path-id }))
   )
-    (match enrollment-data
-      enrollment (some (get current-course-id enrollment))
+    (match enrollment-lookup
+      lookup-data 
+        (let ((enrollment-data (map-get? enrollments { enrollment-id: (get enrollment-id lookup-data) })))
+          (match enrollment-data
+            enrollment-info (some (get current-course-id enrollment-info))
+            none
+          )
+        )
       none
     )
   )
@@ -261,9 +270,14 @@
 
 ;; Helper function to get student enrollment by student and path
 (define-private (get-student-enrollment (student principal) (path-id uint))
-  ;; This would need to iterate through enrollments to find matching student and path
-  ;; For simplicity, returning none here
-  none
+  (let (
+    (enrollment-lookup (map-get? student-path-enrollments { student: student, path-id: path-id }))
+  )
+    (match enrollment-lookup
+      lookup-data (map-get? enrollments { enrollment-id: (get enrollment-id lookup-data) })
+      none
+    )
+  )
 )
 
 ;; Public functions
@@ -411,9 +425,11 @@
       }
       (get-student-profile tx-sender)
     ))
+    (existing-enrollment (map-get? student-path-enrollments { student: tx-sender, path-id: path-id }))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (get is-active path-data) ERR-COURSE-NOT-ACTIVE)
+    (asserts! (is-none existing-enrollment) ERR-ALREADY-EXISTS)
     
     ;; Create or update student profile
     (map-set student-profiles
@@ -434,6 +450,12 @@
         completion-date: none,
         total-score: u0
       }
+    )
+    
+    ;; Create lookup entry
+    (map-set student-path-enrollments
+      { student: tx-sender, path-id: path-id }
+      { enrollment-id: enrollment-id }
     )
     
     (var-set next-enrollment-id (+ enrollment-id u1))
