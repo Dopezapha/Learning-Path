@@ -170,6 +170,52 @@
   }
 )
 
+;; Helper functions for validation
+(define-private (is-valid-lesson-type (lesson-type (string-ascii 20)))
+  (or (is-eq lesson-type "video")
+      (is-eq lesson-type "text")
+      (is-eq lesson-type "quiz")
+      (is-eq lesson-type "assignment"))
+)
+
+(define-private (is-valid-status (status (string-ascii 20)))
+  (or (is-eq status "active")
+      (is-eq status "completed")
+      (is-eq status "dropped")
+      (is-eq status "suspended"))
+)
+
+(define-private (is-valid-achievement-type (achievement-type (string-ascii 50)))
+  (and (> (len achievement-type) u0)
+       (<= (len achievement-type) u50))
+)
+
+(define-private (validate-prerequisites (prerequisites (list 10 uint)))
+  (let ((length (len prerequisites)))
+    (and (<= length u10)
+         (> length u0)))
+)
+
+;; Additional validation helpers
+(define-private (is-valid-lesson-id (lesson-id uint))
+  (and (> lesson-id u0)
+       (< lesson-id (var-get next-lesson-id)))
+)
+
+(define-private (is-valid-path-id (path-id uint))
+  (and (> path-id u0)
+       (< path-id (var-get next-path-id)))
+)
+
+(define-private (is-valid-course-id (course-id uint))
+  (and (> course-id u0)
+       (< course-id (var-get next-course-id)))
+)
+
+(define-private (is-valid-principal (principal-addr principal))
+  (not (is-eq principal-addr 'SP000000000000000000002Q6VF78))
+)
+
 ;; Read-only functions
 
 ;; Get learning path details
@@ -292,24 +338,27 @@
 )
   (let (
     (path-id (var-get next-path-id))
+    (validated-description (if (> (len description) u0) description ""))
+    (validated-reward (if (> completion-reward u0) completion-reward u0))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (> (len title) u0) ERR-INVALID-INPUT)
     (asserts! (and (>= difficulty-level u1) (<= difficulty-level u5)) ERR-INVALID-INPUT)
     (asserts! (> estimated-duration u0) ERR-INVALID-INPUT)
+    (asserts! (<= (len description) u500) ERR-INVALID-INPUT)
     
     (map-set learning-paths
       { path-id: path-id }
       {
         title: title,
-        description: description,
+        description: validated-description,
         creator: tx-sender,
         difficulty-level: difficulty-level,
         estimated-duration: estimated-duration,
         is-active: true,
         created-at: block-height,
         total-courses: u0,
-        completion-reward: completion-reward
+        completion-reward: validated-reward
       }
     )
     
@@ -330,21 +379,26 @@
   (let (
     (course-id (var-get next-course-id))
     (path-data (unwrap! (get-learning-path path-id) ERR-NOT-FOUND))
+    (validated-description (if (> (len description) u0) description ""))
+    (validated-order-index (if (> order-index u0) order-index u1))
+    (validated-prerequisites (if (> (len prerequisites) u0) prerequisites (list)))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (> (len title) u0) ERR-INVALID-INPUT)
     (asserts! (and (>= passing-score u0) (<= passing-score u100)) ERR-INVALID-SCORE)
     (asserts! (get is-active path-data) ERR-COURSE-NOT-ACTIVE)
+    (asserts! (<= (len description) u500) ERR-INVALID-INPUT)
+    (asserts! (<= (len prerequisites) u10) ERR-INVALID-INPUT)
     
     (map-set courses
       { course-id: course-id }
       {
         path-id: path-id,
         title: title,
-        description: description,
+        description: validated-description,
         instructor: tx-sender,
-        order-index: order-index,
-        prerequisites: prerequisites,
+        order-index: validated-order-index,
+        prerequisites: validated-prerequisites,
         is-active: true,
         passing-score: passing-score,
         total-lessons: u0,
@@ -376,11 +430,15 @@
   (let (
     (lesson-id (var-get next-lesson-id))
     (course-data (unwrap! (get-course course-id) ERR-NOT-FOUND))
+    (validated-order-index (if (> order-index u0) order-index u1))
+    (validated-duration (if (> duration u0) duration u1))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (> (len title) u0) ERR-INVALID-INPUT)
     (asserts! (> (len content-hash) u0) ERR-INVALID-INPUT)
     (asserts! (get is-active course-data) ERR-COURSE-NOT-ACTIVE)
+    (asserts! (is-valid-lesson-type lesson-type) ERR-INVALID-INPUT)
+    (asserts! (<= (len content-hash) u64) ERR-INVALID-INPUT)
     
     (map-set lessons
       { lesson-id: lesson-id }
@@ -389,8 +447,8 @@
         title: title,
         content-hash: content-hash,
         lesson-type: lesson-type,
-        order-index: order-index,
-        duration: duration,
+        order-index: validated-order-index,
+        duration: validated-duration,
         is-mandatory: is-mandatory,
         created-at: block-height
       }
@@ -507,10 +565,14 @@
     (lesson-data (unwrap! (get-lesson lesson-id) ERR-NOT-FOUND))
     (course-id (get course-id lesson-data))
     (course-progress-data (unwrap! (get-course-progress tx-sender course-id) ERR-NOT-FOUND))
+    (validated-time-spent (if (> time-spent u0) time-spent u1))
+    (validated-notes (if (> (len notes) u0) notes ""))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
+    (asserts! (is-valid-lesson-id lesson-id) ERR-INVALID-INPUT)
     (asserts! (and (>= score u0) (<= score u100)) ERR-INVALID-SCORE)
     (asserts! (is-eq (get status course-progress-data) "in-progress") ERR-INVALID-STATUS)
+    (asserts! (<= (len notes) u500) ERR-INVALID-INPUT)
     
     ;; Mark lesson as completed
     (map-set lesson-progress
@@ -519,9 +581,9 @@
         course-id: course-id,
         completed: true,
         score: score,
-        time-spent: time-spent,
+        time-spent: validated-time-spent,
         completed-at: (some block-height),
-        notes: notes
+        notes: validated-notes
       }
     )
     
@@ -590,16 +652,18 @@
   (let (
     (course-data (unwrap! (get-course course-id) ERR-NOT-FOUND))
     (course-progress-data (unwrap! (get-course-progress tx-sender course-id) ERR-NOT-FOUND))
+    (validated-review (if (> (len review) u0) review ""))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (and (>= rating u1) (<= rating u5)) ERR-INVALID-INPUT)
     (asserts! (is-eq (get status course-progress-data) "completed") ERR-UNAUTHORIZED-ACCESS)
+    (asserts! (<= (len review) u500) ERR-INVALID-INPUT)
     
     (map-set course-reviews
       { student: tx-sender, course-id: course-id }
       {
         rating: rating,
-        review: review,
+        review: validated-review,
         created-at: block-height,
         is-verified: true
       }
@@ -619,17 +683,24 @@
 )
   (let (
     (path-data (unwrap! (get-learning-path path-id) ERR-NOT-FOUND))
+    (validated-score (if (and (>= score u0) (<= score u100)) score u0))
+    (validated-badge-hash (if (> (len badge-hash) u0) badge-hash ""))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
+    (asserts! (is-valid-principal student) ERR-INVALID-INPUT)
+    (asserts! (is-valid-path-id path-id) ERR-INVALID-INPUT)
     (asserts! (or (is-eq tx-sender contract-owner) (is-eq tx-sender (get creator path-data))) ERR-OWNER-ONLY)
+    (asserts! (is-valid-achievement-type achievement-type) ERR-INVALID-INPUT)
+    (asserts! (and (>= score u0) (<= score u100)) ERR-INVALID-SCORE)
+    (asserts! (<= (len badge-hash) u64) ERR-INVALID-INPUT)
     
     (map-set achievements
       { student: student, path-id: path-id }
       {
         achievement-type: achievement-type,
         earned-at: block-height,
-        score: score,
-        badge-hash: badge-hash
+        score: validated-score,
+        badge-hash: validated-badge-hash
       }
     )
     
@@ -683,16 +754,21 @@
       }
       (get-instructor-profile tx-sender)
     ))
+    (validated-bio (if (> (len bio) u0) bio ""))
+    (validated-specialization (if (> (len specialization) u0) specialization ""))
   )
     (asserts! (not (var-get contract-paused)) ERR-INVALID-STATUS)
     (asserts! (> (len username) u0) ERR-INVALID-INPUT)
+    (asserts! (<= (len username) u50) ERR-INVALID-INPUT)
+    (asserts! (<= (len bio) u500) ERR-INVALID-INPUT)
+    (asserts! (<= (len specialization) u100) ERR-INVALID-INPUT)
     
     (map-set instructor-profiles
       { instructor: tx-sender }
       (merge existing-profile {
         username: username,
-        bio: bio,
-        specialization: specialization
+        bio: validated-bio,
+        specialization: validated-specialization
       })
     )
     
@@ -706,6 +782,7 @@
     (instructor-data (unwrap! (get-instructor-profile instructor) ERR-NOT-FOUND))
   )
     (asserts! (is-eq tx-sender contract-owner) ERR-OWNER-ONLY)
+    (asserts! (is-valid-principal instructor) ERR-INVALID-INPUT)
     
     (map-set instructor-profiles
       { instructor: instructor }
